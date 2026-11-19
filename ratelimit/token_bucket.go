@@ -8,7 +8,10 @@ import (
 )
 
 // ErrLimited is returned in the request path when the rate limiter is
-// triggered and the request is rejected.
+// triggered and the request is rejected. The circuit breaker middlewares in
+// this repository recognize ErrLimited and treat it as a rejection rather
+// than a downstream failure, so it never counts against a breaker's error
+// count, regardless of middleware order.
 var ErrLimited = errors.New("rate limit exceeded")
 
 // Allower dictates whether or not a request is acceptable to run.

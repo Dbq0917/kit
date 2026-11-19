@@ -1,6 +1,8 @@
 package circuitbreaker_test
 
 import (
+	"context"
+	"errors"
 	"io/ioutil"
 	stdlog "log"
 	"testing"
@@ -9,6 +11,8 @@ import (
 	"github.com/afex/hystrix-go/hystrix"
 
 	"github.com/go-kit/kit/circuitbreaker"
+	"github.com/go-kit/kit/endpoint"
+	"github.com/go-kit/kit/ratelimit"
 )
 
 func TestHystrix(t *testing.T) {
@@ -37,4 +41,30 @@ func TestHystrix(t *testing.T) {
 	requestDelay := 5 * time.Millisecond
 
 	testFailingEndpoint(t, breaker, primeWith, shouldPass, requestDelay, openCircuitError)
+}
+
+func TestHystrixIgnoresRateLimitRejections(t *testing.T) {
+	stdlog.SetOutput(ioutil.Discard)
+
+	const commandName = "ratelimited-endpoint"
+	hystrix.ConfigureCommand(commandName, hystrix.CommandConfig{
+		// Any counted failure would push the error percentage to 100% and
+		// open the breaker once the volume threshold is met.
+		ErrorPercentThreshold: 1,
+		MaxConcurrentRequests: 1000,
+	})
+
+	// The endpoint always rejects, as an inner rate limiter would.
+	var e endpoint.Endpoint
+	e = func(context.Context, interface{}) (interface{}, error) { return nil, ratelimit.ErrLimited }
+	e = circuitbreaker.Hystrix(commandName)(e)
+
+	// hystrix-go reports results on buffered channels, so inject a small
+	// delay to let the breaker observe them, as in TestHystrix.
+	for i := 0; i < hystrix.DefaultVolumeThreshold*2; i++ {
+		if _, err := e(context.Background(), struct{}{}); !errors.Is(err, ratelimit.ErrLimited) {
+			t.Fatalf("request %d: want %v, have %v", i, ratelimit.ErrLimited, err)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 }
